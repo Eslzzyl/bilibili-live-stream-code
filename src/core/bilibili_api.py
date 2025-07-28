@@ -3,7 +3,19 @@ B站API相关的核心业务逻辑
 """
 
 import requests
+import urllib
+import hashlib
 from typing import Dict, Tuple, Optional
+
+
+def appsign(params: dict, appkey: str, appsec: str) -> dict:
+    "为请求参数进行 APP 签名"
+    params.update({"appkey": appkey})
+    params = dict(sorted(params.items()))  # 按照 key 重排参数
+    query = urllib.parse.urlencode(params)  # 序列化参数
+    sign = hashlib.md5((query + appsec).encode()).hexdigest()  # 计算 api 签名
+    params.update({"sign": sign})
+    return params
 
 
 class BilibiliAPI:
@@ -19,11 +31,15 @@ class BilibiliAPI:
             "referer": "https://link.bilibili.com/p/center/index",
             "sec-ch-ua": '"Microsoft Edge";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
             "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Linux"',
+            "sec-ch-ua-platform": '"Windows"',
             "sec-fetch-dest": "empty",
             "sec-fetch-mode": "cors",
             "sec-fetch-site": "same-site",
             "user-agent": self.user_agent,
+        }
+        self.version_data = {
+            "system_version": 2,
+            "ts": "",
         }
 
     def get_qrcode_data(self) -> Optional[Dict]:
@@ -101,14 +117,36 @@ class BilibiliAPI:
         self, room_id: int, csrf: str, area_v2: int, cookies: Dict
     ) -> Tuple[bool, Optional[Dict]]:
         """开始直播并获取推流码，返回(成功状态, 推流数据)"""
+
+        app_key = "aae92bc66f3edfab"
+        app_sec = "af125a0d5279fd576c1b4418a3e8276d"
+
+        v_data = self.version_data
+        v_data["ts"] = requests.get(
+            url="https://api.bilibili.com/x/report/click/now", headers=self.headers
+        ).json()["data"]["now"]
+        v_data = appsign(v_data, app_key, app_sec)
+        query = urllib.parse.urlencode(v_data)
+
+        version_json = requests.get(
+            url=f"https://api.live.bilibili.com/xlive/app-blink/v1/liveVersionInfo/getHomePageLiveVersion?{query}",
+            headers=self.headers,
+            cookies=cookies,
+        ).json()
+
         data = {
             "room_id": room_id,
-            "platform": "android_link",
+            "platform": "pc_link",
             "area_v2": area_v2,
             "backup_stream": "0",
             "csrf_token": csrf,
             "csrf": csrf,
+            "build": version_json.get("data", {}).get("build", 0),
+            "version": version_json.get("data", {}).get("curr_version", ""),
+            "ts": v_data["ts"],
         }
+
+        data = appsign(data, app_key, app_sec)
 
         try:
             response = requests.post(
@@ -131,7 +169,7 @@ class BilibiliAPI:
         """停止直播，返回成功状态"""
         data = {
             "room_id": room_id,
-            "platform": "android_link",
+            "platform": "pc_link",
             "csrf_token": csrf,
             "csrf": csrf,
         }
@@ -159,7 +197,7 @@ class BilibiliAPI:
 
         data = {
             "room_id": room_id,
-            "platform": "android_link",
+            "platform": "pc_link",
             "title": title,
             "csrf_token": csrf,
             "csrf": csrf,
